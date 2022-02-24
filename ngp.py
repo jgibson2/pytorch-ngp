@@ -57,7 +57,11 @@ class NeuralGraphicsPrimitiveModel(pl.LightningModule):
         side_lengths_bl1d = torch.ones((b, l, 1, d), device=self.device)
         # n-linear interpolation can be taken as the vertex's value times the volume of the
         # n-dimensional volume with corners defined by the *opposite* vertex and the point in the interior
-        residuals_blDd = side_lengths_bl1d - torch.abs(vertices_blDd - scaled_coordinates_bld.view(b, l, 1, d))
+        residuals_blDd = torch.clamp(
+            side_lengths_bl1d - torch.abs(vertices_blDd - scaled_coordinates_bld.view(b, l, 1, d)),
+            min=0.0001,
+            max=0.9999
+        )
         # the volume is obviously the reduction along that dimension via multiplication
         weights_blD1 = einops.reduce(residuals_blDd,
                                      "b l D d -> b l D 1",
@@ -130,7 +134,7 @@ class SDFNGPModel(NeuralGraphicsPrimitiveModel):
         return loss
 
 
-class SuperResolutionNGPModel(NeuralGraphicsPrimitiveModel):
+class GigapixelNGPModel(NeuralGraphicsPrimitiveModel):
     def __init__(self, pos_enc_freqs=6, coords_min=0.0, coords_max=1.0):
         mlp = utils.make_mlp(2 * 2 * pos_enc_freqs, 3, hidden_dim=64, hidden_layers=2,
                              output_nonlinearity=torch.nn.Sigmoid())
