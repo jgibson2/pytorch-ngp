@@ -77,7 +77,11 @@ def train_gigapixel(input_path, batch_size, output_path=None, model_path=None):
     img_path = pathlib.Path(input_path)
     dev = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    train_dataset = ImageDataset(str(img_path))
+    if img_path.suffix == ".exr":
+        train_dataset = EXRDataset(str(img_path))
+    else:
+        train_dataset = ImageDataset(str(img_path))
+
     if model_path is None:
         model = GigapixelNGPModel(pos_enc_freqs=num_freqs)
     else:
