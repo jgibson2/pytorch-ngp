@@ -1,0 +1,7 @@
+data/image/yosemite.jpg filter=lfs diff=lfs merge=lfs -text
+data/sdf/bunny_nonormals.sdf filter=lfs diff=lfs merge=lfs -text
+data/sdf/dragon.obj filter=lfs diff=lfs merge=lfs -text
+data/sdf/armadillo.obj filter=lfs diff=lfs merge=lfs -text
+data/sdf/bunny_fixed.obj filter=lfs diff=lfs merge=lfs -text
+data/nerf/fox/transforms.json filter=lfs diff=lfs merge=lfs -text
+data/nerf/fox/images/* filter=lfs diff=lfs merge=lfs -text
