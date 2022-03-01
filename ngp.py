@@ -44,7 +44,7 @@ class NeuralGraphicsPrimitiveModel(pl.LightningModule):
         vertices_blDd = torch.gather(coords_bl2d, 2, indices_blDd)
         return vertices_blDd
 
-    def interpolate(self, scaled_coordinates_bld, feats_blDf, vertices_blDd):
+    def interpolate(self, scaled_coordinates_bld, feats_blDf, vertices_blDd, smooth=False):
         """
         :param scaled_coordinates_bld:
         :param feats_blDf:
@@ -52,7 +52,7 @@ class NeuralGraphicsPrimitiveModel(pl.LightningModule):
         :return:
         """
         b, l, d = scaled_coordinates_bld.shape
-        # get hypercube main diagonal length, when the coordinates are scaled all voxels
+        # get cube side length, when the coordinates are scaled all voxels
         # have side length one
         side_lengths_bl1d = torch.ones((b, l, 1, d), device=self.device)
         # n-linear interpolation can be taken as the vertex's value times the volume of the
@@ -66,21 +66,26 @@ class NeuralGraphicsPrimitiveModel(pl.LightningModule):
         weights_blD1 = einops.reduce(residuals_blDd,
                                      "b l D d -> b l D 1",
                                      "prod")
+        if smooth:
+            weights_blD1 = (weights_blD1 ** 2) * (3.0 - (2.0 * weights_blD1))
         # multiply each vertex value by the weights and sum along the vertices
         interpolated_feats_blf = einops.reduce(feats_blDf * weights_blD1,
                                                "b l D f -> b l f",
                                                "sum")
         return interpolated_feats_blf
 
-    def forward(self, x):
+    def get_interpolated_features(self, coords, smooth=False):
         """
-        :param x: bx(d+e) position vector in [0,1] for each dimension with bxe additional data concatenated onto feature
-        :return: output of network
+        :param x: b x d position vector in [0,1] for each dimension
+        :return: b x (L F) features to use as input to the network
         """
-        coords, eta = x[:, :self.d], x[:, self.d:]
         scaled_coords_bld = torch.einsum("bd,l->bld", coords, self.N_l)
+        if smooth:
+            # add half voxel size
+            scaled_coords_bld += 1.0 / (2.0 * einops.rearrange(self.N_l, "l -> 1 l 1"))
         low_coords_bld = torch.floor(scaled_coords_bld).long()
-        high_coords_bld = torch.ceil(scaled_coords_bld).long()
+        # add a bit to make sure we round up
+        high_coords_bld = torch.ceil(scaled_coords_bld + (1.0 / (self.N_max + 1))).long()
         vertices_blDd = self.get_hypercube_vertices(low_coords_bld, high_coords_bld)
         b, l, D, d = vertices_blDd.shape
 
@@ -89,9 +94,14 @@ class NeuralGraphicsPrimitiveModel(pl.LightningModule):
         l_indices = torch.arange(l, dtype=torch.long, device=self.device)
         feats_blDf = einops.rearrange(self.features[l_indices[:, None], feat_indices_lN, :],
                                       "l (b D) f -> b l D f", b=b, l=l, D=D)
-        interpolated_feats_blf = self.interpolate(scaled_coords_bld, feats_blDf, vertices_blDd)
-        final_feats_bF = torch.cat((interpolated_feats_blf.flatten(start_dim=1), eta), dim=1)
+        interpolated_feats_blf = self.interpolate(scaled_coords_bld, feats_blDf, vertices_blDd, smooth=smooth)
 
+        return interpolated_feats_blf.flatten(start_dim=1)
+
+    def forward(self, x):
+        coords, eta = x[:, :self.d], x[:, self.d:]
+        interpolated_feats_bF = self.get_interpolated_features(coords, smooth=True)
+        final_feats_bF = torch.cat((interpolated_feats_bF, eta), dim=1)
         return self.mlp(final_feats_bF)
 
     def step(self, batch, batch_idx, phase):
@@ -114,7 +124,7 @@ class NeuralGraphicsPrimitiveModel(pl.LightningModule):
 class SDFNGPModel(NeuralGraphicsPrimitiveModel):
     def __init__(self, pos_enc_freqs=6, coords_min=-1.0, coords_max=1.0):
         mlp = utils.make_mlp(3 * 2 * pos_enc_freqs, 1, hidden_dim=128, hidden_layers=4)
-        super(SDFNGPModel, self).__init__(mlp, dimension=3, feature_dim=2)
+        super().__init__(mlp, dimension=3, feature_dim=2)
         self.coords_min = coords_min
         self.coords_max = coords_max
         self.pos_enc_freqs = pos_enc_freqs

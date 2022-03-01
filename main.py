@@ -57,16 +57,17 @@ def train_sdf(input_path, batch_size, output_path=None, model_path=None):
             gpus=1,
             logger=True,
             callbacks=[
-                pl.callbacks.EarlyStopping(monitor="validation/loss", mode="min", patience=5),
+                pl.callbacks.EarlyStopping(monitor="validation/loss", mode="min", patience=3),
                 pl.callbacks.ModelCheckpoint(monitor="validation/loss", mode="min"),
             ],
             enable_checkpointing=True,
             min_epochs=1,
-            max_epochs=50,
+            max_epochs=20,
             precision=32 if dev == torch.device("cpu") else 16
         )
 
         trainer.fit(model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+        model.to(dev)
 
     out_path = output_path or sdf_path.parent / (sdf_path.stem + "_pred.ply")
     predict_mesh(val_dataset, model, str(out_path))
@@ -101,16 +102,17 @@ def train_gigapixel(input_path, batch_size, output_path=None, model_path=None):
             gpus=1,
             logger=True,
             callbacks=[
-                pl.callbacks.EarlyStopping(monitor="training/loss", mode="min", patience=5),
+                pl.callbacks.EarlyStopping(monitor="training/loss", mode="min", patience=3),
                 pl.callbacks.ModelCheckpoint(monitor="training/loss", mode="min"),
             ],
             enable_checkpointing=True,
             min_epochs=1,
-            max_epochs=50,
+            max_epochs=20,
             precision=32 if dev == torch.device("cpu") else 16
         )
 
         trainer.fit(model, train_dataloaders=train_dataloader)
+        model.to(dev)
 
     out_path = output_path or img_path.parent / (img_path.stem + "_pred.jpg")
     predict_image(train_dataset, model, str(out_path), batch_size=batch_size)

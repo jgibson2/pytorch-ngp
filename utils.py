@@ -9,7 +9,6 @@ import contextlib
 
 @torch.jit.script
 def spatial_hash(x, t: int):
-    # TODO check that a xor b mod t = ((a mod t) xor (b mod t)) mod t
     pi = (1, 2_654_435_761, 805_459_861, 2_971_215_073, 433_494_437)
     b, d = x.shape
     if d > len(pi):
@@ -26,6 +25,59 @@ def pos_encoding(x: torch.Tensor, num_freq: int, dim: int = 1):
     for i in range(num_freq):
         out.extend((torch.cos(np.pi * x * (2 ** i)), torch.sin(np.pi * x * (2 ** i))))
     return torch.cat(out, dim=dim)
+
+
+@torch.jit.script
+def sh_encoding(t: torch.Tensor, degree: int, dim: int = 1):
+    if degree > 5:
+        raise ValueError("degree > 5 not supported")
+    b, d = t.shape
+    if d != 3:
+        raise ValueError("spherical harmonics encoding only defined for 3 dimensions")
+    x, y, z = t[:, 0], t[:, 1], t[:, 2]
+    # see https://github.com/NVlabs/tiny-cuda-nn/blob/master/include/tiny-cuda-nn/encodings/spherical_harmonics.h
+    # only degree up to 5
+    xy = x * y
+    xz = x * z
+    yz = y * z
+    x2 = x * x
+    y2 = y * y
+    z2 = z * z
+    x4 = x2 * x2
+    y4 = y2 * y2
+    z4 = z2 * z2
+    enc = torch.zeros((b, int(degree ** 2)))
+    # degree 1
+    enc[:, 0] = 0.28209479177387814  # 1/(2*sqrt(pi))
+    if degree >= 2:
+        enc[:, 1] = -0.48860251190291987 * y  # -sqrt(3)*y/(2*sqrt(pi))
+        enc[:, 2] = 0.48860251190291987 * z  # sqrt(3)*z/(2*sqrt(pi))
+        enc[:, 3] = -0.48860251190291987 * x  # -sqrt(3)*x/(2*sqrt(pi))
+    if degree >= 3:
+        enc[:, 4] = 1.0925484305920792 * xy  # sqrt(15)*xy/(2*sqrt(pi))
+        enc[:, 5] = -1.0925484305920792 * yz  # -sqrt(15)*yz/(2*sqrt(pi))
+        enc[:, 6] = 0.94617469575755997 * z2 - 0.31539156525251999  # sqrt(5)*(3*z2 - 1)/(4*sqrt(pi))
+        enc[:, 7] = -1.0925484305920792 * xz  # -sqrt(15)*xz/(2*sqrt(pi))
+        enc[:, 8] = 0.54627421529603959 * x2 - 0.54627421529603959 * y2  # sqrt(15)*(x2 - y2)/(4*sqrt(pi))
+    if degree >= 4:
+        enc[:, 9] = 0.59004358992664352 * y * (-3.0 * x2 + y2)  # sqrt(70)*y*(-3*x2 + y2)/(8*sqrt(pi))
+        enc[:, 10] = 2.8906114426405538 * xy * z  # sqrt(105)*xy*z/(2*sqrt(pi))
+        enc[:, 11] = 0.45704579946446572 * y * (1.0 - 5.0 * z2)  # sqrt(42)*y*(1 - 5*z2)/(8*sqrt(pi))
+        enc[:, 12] = 0.3731763325901154 * z * (5.0 * z2 - 3.0)  # sqrt(7)*z*(5*z2 - 3)/(4*sqrt(pi))
+        enc[:, 13] = 0.45704579946446572 * x * (1.0 - 5.0 * z2)  # sqrt(42)*x*(1 - 5*z2)/(8*sqrt(pi))
+        enc[:, 14] = 1.4453057213202769 * z * (x2 - y2)  # sqrt(105)*z*(x2 - y2)/(4*sqrt(pi))
+        enc[:, 15] = 0.59004358992664352 * x * (-x2 + 3.0 * y2)  # sqrt(70)*x*(-x2 + 3*y2)/(8*sqrt(pi))
+    if degree >= 5:
+        enc[:, 16] = 2.5033429417967046 * xy * (x2 - y2)  # 3*sqrt(35)*xy*(x2 - y2)/(4*sqrt(pi))
+        enc[:, 17] = 1.7701307697799304 * yz * (-3.0 * x2 + y2)  # 3*sqrt(70)*yz*(-3*x2 + y2)/(8*sqrt(pi))
+        enc[:, 18] = 0.94617469575756008 * xy * (7.0 * z2 - 1.0)  # 3*sqrt(5)*xy*(7*z2 - 1)/(4*sqrt(pi))
+        enc[:, 19] = 0.66904654355728921 * yz * (3.0 - 7.0 * z2)  # 3*sqrt(10)*yz*(3 - 7*z2)/(8*sqrt(pi))
+        enc[:, 20] = -3.1735664074561294 * z2 + 3.7024941420321507 * z4 + 0.31735664074561293  # 3*(-30*z2 + 35*z4 + 3)/(16*sqrt(pi))
+        enc[:, 21] = 0.66904654355728921 * xz * (3.0 - 7.0 * z2)  # 3*sqrt(10)*xz*(3 - 7*z2)/(8*sqrt(pi))
+        enc[:, 22] = 0.47308734787878004 * (x2 - y2) * (7.0 * z2 - 1.0)  # 3*sqrt(5)*(x2 - y2)*(7*z2 - 1)/(8*sqrt(pi))
+        enc[:, 23] = 1.7701307697799304 * xz * (-x2 + 3.0 * y2)  # 3*sqrt(70)*xz*(-x2 + 3*y2)/(8*sqrt(pi))
+        enc[:, 24] = -3.7550144126950569 * x2 * y2 + 0.62583573544917614 * x4 + 0.62583573544917614 * y4  # 3*sqrt(35)*(-6*x2*y2 + x4 + y4)/(16*sqrt(pi))
+    return torch.cat((t, enc), dim=dim)
 
 
 def make_mlp(eta_dim, output_dim, feature_dim=2, levels=16, hidden_layers=2, hidden_dim=64, output_nonlinearity=None):
@@ -47,6 +99,7 @@ def make_mlp(eta_dim, output_dim, feature_dim=2, levels=16, hidden_layers=2, hid
         layers.append(output_nonlinearity)
 
     return nn.Sequential(*layers)
+
 
 # From https://www.github.com/fadel/pytorch_ema/master/torch_ema/ema.py
 
@@ -79,11 +132,12 @@ class ExponentialMovingAverage:
         use_num_updates: Whether to use number of updates when computing
             averages.
     """
+
     def __init__(
-        self,
-        parameters: Iterable[torch.nn.Parameter],
-        decay: float,
-        use_num_updates: bool = True
+            self,
+            parameters: Iterable[torch.nn.Parameter],
+            decay: float,
+            use_num_updates: bool = True
     ):
         if decay < 0.0 or decay > 1.0:
             raise ValueError('Decay must be between 0 and 1')
@@ -103,8 +157,8 @@ class ExponentialMovingAverage:
         self._params_refs = [weakref.ref(p) for p in parameters]
 
     def _get_parameters(
-        self,
-        parameters: Optional[Iterable[torch.nn.Parameter]]
+            self,
+            parameters: Optional[Iterable[torch.nn.Parameter]]
     ) -> Iterable[torch.nn.Parameter]:
         if parameters is None:
             parameters = [p() for p in self._params_refs]
@@ -129,8 +183,8 @@ class ExponentialMovingAverage:
             return parameters
 
     def update(
-        self,
-        parameters: Optional[Iterable[torch.nn.Parameter]] = None
+            self,
+            parameters: Optional[Iterable[torch.nn.Parameter]] = None
     ) -> None:
         """
         Update currently maintained parameters.
@@ -161,8 +215,8 @@ class ExponentialMovingAverage:
                 s_param.sub_(tmp)
 
     def copy_to(
-        self,
-        parameters: Optional[Iterable[torch.nn.Parameter]] = None
+            self,
+            parameters: Optional[Iterable[torch.nn.Parameter]] = None
     ) -> None:
         """
         Copy current averaged parameters into given collection of parameters.
@@ -178,8 +232,8 @@ class ExponentialMovingAverage:
             param.data.copy_(s_param.data)
 
     def store(
-        self,
-        parameters: Optional[Iterable[torch.nn.Parameter]] = None
+            self,
+            parameters: Optional[Iterable[torch.nn.Parameter]] = None
     ) -> None:
         """
         Save the current parameters for restoring later.
@@ -196,8 +250,8 @@ class ExponentialMovingAverage:
         ]
 
     def restore(
-        self,
-        parameters: Optional[Iterable[torch.nn.Parameter]] = None
+            self,
+            parameters: Optional[Iterable[torch.nn.Parameter]] = None
     ) -> None:
         """
         Restore the parameters stored with the `store` method.
@@ -223,8 +277,8 @@ class ExponentialMovingAverage:
 
     @contextlib.contextmanager
     def average_parameters(
-        self,
-        parameters: Optional[Iterable[torch.nn.Parameter]] = None
+            self,
+            parameters: Optional[Iterable[torch.nn.Parameter]] = None
     ):
         r"""
         Context manager for validation/inference with averaged parameters.
